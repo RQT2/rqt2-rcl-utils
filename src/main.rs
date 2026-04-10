@@ -2,8 +2,11 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 
 mod package_service;
+mod clone_ws;
 
+use clone_ws::MyCloneWorkspaceService;
 use package_service::{MyPackageService, get_ros_distro, rqt2_api};
+use rqt2_api::clone_workspace_service_server::CloneWorkspaceServiceServer;
 use rqt2_api::package_service_server::PackageServiceServer;
 
 #[tokio::main]
@@ -15,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     
     let pkg_svc = PackageServiceServer::new(MyPackageService::default());
+    let clone_svc = CloneWorkspaceServiceServer::new(MyCloneWorkspaceService::default());
 
     println!(">_ RQT2-API Backend");
     println!("   {}@ROS2 {}", addr, get_ros_distro().await);
@@ -22,6 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Server::builder()
         .add_service(reflection_service)
         .add_service(pkg_svc)
+        .add_service(clone_svc)
         .serve(addr)
         .await?;
 

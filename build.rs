@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let proto_files = &["external/rqt2-api/proto/packages.proto"];
+    let proto_files = &[
+        "external/rqt2-api/proto/packages.proto",
+        "external/rqt2-api/proto/clone_ws.proto",
+    ];
     let proto_dirs = &["external/rqt2-api/proto"];
 
     tonic_build::configure()
