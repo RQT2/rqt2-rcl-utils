@@ -1,0 +1,3 @@
+[submodule "external/rqt2-api"]
+	path = external/rqt2-api
+	url = https://github.com/RQT2/rqt2-api.git
