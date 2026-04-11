@@ -10,7 +10,12 @@ use tonic::{Request, Response, Status};
 
 use crate::package_service::rqt2_api;
 use rqt2_api::clone_workspace_service_server::CloneWorkspaceService;
-use rqt2_api::{CloneWorkspaceProgress, CloneWorkspaceRequest};
+use rqt2_api::{
+    CloneWorkspaceProgress,
+    CloneWorkspaceRequest,
+    SetCurrentTargetDirRequest,
+    SetCurrentTargetDirResponse,
+};
 
 pub struct MyCloneWorkspaceService {
     last_target_dir: Arc<Mutex<Option<PathBuf>>>,
@@ -66,6 +71,56 @@ fn extract_progress(line: &str) -> f32 {
 #[tonic::async_trait]
 impl CloneWorkspaceService for MyCloneWorkspaceService {
     type CloneWorkspaceStream = ReceiverStream<Result<CloneWorkspaceProgress, Status>>;
+
+    async fn set_current_target_dir(
+        &self,
+        req: Request<SetCurrentTargetDirRequest>,
+    ) -> Result<Response<SetCurrentTargetDirResponse>, Status> {
+        let target_dir_raw = req.into_inner().target_dir;
+        let target_dir = target_dir_raw.trim();
+
+        if target_dir.is_empty() {
+            return Ok(Response::new(SetCurrentTargetDirResponse {
+                ok: false,
+                message: "target_dir vacío".to_string(),
+            }));
+        }
+
+        let expanded = expand_home_dir(target_dir);
+        let path = PathBuf::from(&expanded);
+
+        if !path.exists() || !path.is_dir() {
+            return Ok(Response::new(SetCurrentTargetDirResponse {
+                ok: false,
+                message: format!("Ruta inválida: {}", path.display()),
+            }));
+        }
+
+        let state_file = MyCloneWorkspaceService::workspace_state_file();
+        if let Some(parent) = state_file.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                return Ok(Response::new(SetCurrentTargetDirResponse {
+                    ok: false,
+                    message: format!("No se pudo preparar estado: {e}"),
+                }));
+            }
+        }
+
+        if let Err(e) = fs::write(&state_file, path.to_string_lossy().as_bytes()) {
+            return Ok(Response::new(SetCurrentTargetDirResponse {
+                ok: false,
+                message: format!("No se pudo guardar target_dir: {e}"),
+            }));
+        }
+
+        let mut lock = self.last_target_dir.lock().await;
+        *lock = Some(path.clone());
+
+        Ok(Response::new(SetCurrentTargetDirResponse {
+            ok: true,
+            message: path.to_string_lossy().to_string(),
+        }))
+    }
 
     async fn clone_workspace(
         &self,
