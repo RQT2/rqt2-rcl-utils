@@ -1,64 +1,15 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-pub mod rqt2_api {
-    tonic::include_proto!("rqt2.api.v1");
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("rqt2_descriptor");
-}
+use rqt2_api::rqt2::api::v1::package_service_server::PackageService;
+use rqt2_api::rqt2::api::v1::{InstallProgress, InstallRequest, ListPackagesRequest, PackageInfo};
 
-use rqt2_api::package_service_server::PackageService;
-use rqt2_api::{InstallRequest, InstallProgress, PackageInfo, ListPackagesRequest};
-
-pub async fn get_ros_distro() -> String {
-    let output = Command::new("/bin/bash")
-        .arg("-c")
-        .arg("source /opt/ros/jazzy/setup.bash && echo $ROS_DISTRO")
-        .output()
-        .await;
-
-    match output {
-        Ok(out) => {
-            let distro = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if distro.is_empty() { "Ninguna".into() } else { distro }
-        },
-        Err(_) => "No detectada".into(),
-    }
-}
-
-async fn get_all_installed_matching_prefixes() -> HashSet<String> {
-    let mut installed = HashSet::new();
-    let output = Command::new("dpkg-query")
-        .args(["-W", "-f=${Package} ${Status}\n", "ros-*", "rti-*", "python3-*"])
-        .output()
-        .await;
-
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if line.contains("install ok installed") {
-                if let Some(name) = line.split_whitespace().next() {
-                    installed.insert(name.to_string());
-                }
-            }
-        }
-    }
-    installed
-}
-
-async fn check_if_installed(pkg: &str) -> bool {
-    let output = Command::new("dpkg-query")
-        .args(["-W", "-f=${Status}", pkg])
-        .output()
-        .await;
-    
-    output.map(|o| String::from_utf8_lossy(&o.stdout).contains("install ok installed"))
-          .unwrap_or(false)
-}
+use crate::utils::admin::run_apt_action_pkexec;
+use crate::utils::apt::{check_if_installed, get_all_installed_matching_prefixes, get_ros_distro};
 
 pub struct MyPackageService {
     is_installing: Arc<Mutex<bool>>,
@@ -110,8 +61,10 @@ impl PackageService for MyPackageService {
                             version: current_distro.clone(),
                             is_installed: installed_set.contains(clean_name),
                         };
-                    
-                        if tx.send(Ok(pkg)).await.is_err() { break; }
+
+                        if tx.send(Ok(pkg)).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -137,12 +90,33 @@ impl PackageService for MyPackageService {
         let (tx, rx) = mpsc::channel(100);
 
         tokio::spawn(async move {
-            let mut child = Command::new("pkexec")
-                .args(["apt-get", action, "-y", &pkg_name])
-                .spawn()
-                .expect("Error al lanzar pkexec");
+            let mut child = match run_apt_action_pkexec(action, &pkg_name) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error spawning pkexec: {e}");
+                    let mut lock = is_installing_flag.lock().await;
+                    *lock = false;
+                    let _ = tx.send(Ok(InstallProgress {
+                        log_line: "ERROR_LAUNCH_FAILED".to_string(),
+                        progress: 0.0,
+                    })).await;
+                    return;
+                }
+            };
+
+            if let Some(stdout) = child.stdout.take() {
+                use tokio::io::AsyncBufReadExt;
+                let mut reader = tokio::io::BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let _ = tx.send(Ok(InstallProgress {
+                        log_line: line,
+                        progress: 50.0,
+                    })).await;
+                }
+            }
 
             let status = child.wait().await;
+
             let mut lock = is_installing_flag.lock().await;
             *lock = false;
 

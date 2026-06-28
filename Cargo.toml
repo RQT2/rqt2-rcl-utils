@@ -2,23 +2,21 @@
 name = "rqt2_rcl_utils"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
+rqt2_api = { path = "external/rqt2-api" }
 tokio = { version = "1.0", features = ["full"] }
 tonic = "0.11"
 tonic-reflection = "0.11"
 prost = "0.12"
 prost-types = "0.12"
 bytes = "1.4"
+sys-info = "0.9"
 
 tokio-stream = "0.1"
 uuid = { version = "1.4", features = ["v4"] }
 
 notify = "5"
 portable-pty = "0.9"
-
-[build-dependencies]
-tonic-build = "0.10"
 
 
